@@ -1,0 +1,538 @@
+{
+  "name": "AgenticBrowserSwarmFlow",
+  "state": {
+    "type": "json_schema",
+    "json_schema": {
+      "type": "object",
+      "required": [
+        "goal"
+      ],
+      "properties": {
+        "goal": {
+          "type": "string",
+          "description": "The user's high-level objective for the swarm to accomplish"
+        },
+        "swarm_brief": {
+          "type": "string",
+          "description": "Dynamic role assignments, capability map, and coordination protocol produced by the Swarm Coordinator"
+        },
+        "final_answer": {
+          "type": "string",
+          "description": "The compiled answer delivered to the user"
+        },
+        "heal_attempts": {
+          "type": "integer",
+          "description": "Counter tracking how many auto-heal passes have been run in the current execution"
+        },
+        "loop_iteration": {
+          "type": "integer",
+          "description": "Counter tracking the total number of swarm loop iterations executed in the current run"
+        },
+        "validation_audit": {
+          "type": "object",
+          "properties": {
+            "filter_actions": {
+              "type": "string"
+            },
+            "overall_verdict": {
+              "type": "string"
+            },
+            "freshness_status": {
+              "type": "string"
+            },
+            "math_logic_status": {
+              "type": "string"
+            },
+            "uniqueness_status": {
+              "type": "string"
+            }
+          },
+          "description": "Structured audit log produced by the advanced validation crew — records math/logic checks, freshness status, uniqueness status, and filter actions"
+        },
+        "search_fingerprints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Registry of canonical fingerprints of all past searches — used by the uniqueness gate to detect and prevent duplicate queries"
+        }
+      }
+    }
+  },
+  "schema": "crewai.flow/v1",
+  "methods": {
+    "swarm_retry": {
+      "do": {
+        "call": "crew",
+        "with": {
+          "tasks": [
+            {
+              "name": "gap_analysis_task",
+              "agent": "gap_analyst",
+              "description": "Read the validation report and the Swarm Brief's CONFLICT RULES. Produce a focused numbered re-plan that targets only the items reallocated to the retry squad under those rules.\n\nIMPORTANT \tat each gap \tat each gap UNIQUENESS RULE: You must also read the Unique Queries already used (listed below). Do NOT re-use any query, URL, or keyword phrase that already appears in that list. Generate genuinely new, alternative queries for each gap \tat each gap (use synonyms, different phrasing, alternative sources).\n\nOriginal goal: {goal}\n\nSwarm Brief:\n{swarm_brief}\n\nValidation report (includes FOUND and GAPS sections):\n{validation_report}\n\nQueries already used (do NOT repeat these):\n{unique_queries}",
+              "expected_output": "A focused numbered list of browser steps targeting only the reallocated/missing information, following the communication protocol in the Swarm Brief. Each step must use a NEW query not in the already-used list, state exactly what to do (navigate, search, click, extract), and explain why it differs from prior attempts. If there are no gaps, return: NO DATA: no gaps to address."
+            },
+            {
+              "name": "retry_browse_task",
+              "agent": "retry_browser",
+              "description": "Execute the Gap Analyst's re-plan and report what additional information you discover, tagging findings per the Swarm Brief's communication protocol.",
+              "expected_output": "A detailed summary of the additional information found during this retry pass, tagged per the Swarm Brief's protocol. Quote key content directly from the pages visited. If no further information could be found, state: NO DATA: re-plan returned nothing."
+            }
+          ],
+          "agents": {
+            "gap_analyst": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Produce a focused, numbered re-plan targeting only the information identified as missing or reallocated in the validation report, following the Swarm Brief's CONFLICT RULES, and using ONLY queries that have NOT already been used (no duplicates).",
+              "role": "Gap Analyst",
+              "verbose": true,
+              "backstory": "You are the squad's adaptive re-planner and uniqueness enforcer. You read the full validation report and the Swarm Brief's CONFLICT RULES, extract every item flagged for retry reallocation, and produce a tight numbered action plan targeting those gaps \tat each gap with FRESH queries only. Before finalising any query, you check it against the already-used list: if the query or its normalised form is already there, you rephrase it or find an alternative source. You never re-run steps that already succeeded and never repeat a query already attempted. If the validation report shows no gaps, return: NO DATA: no gaps to address.",
+              "inject_date": true
+            },
+            "retry_browser": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Execute the gap-targeted re-plan and report exactly what additional information was found, following the Swarm Brief's communication protocol.",
+              "role": "Retry Browser Agent",
+              "tools": [
+                "crewai_tools:ScrapeWebsiteTool",
+                "crewai_tools:JinaScrapeWebsiteTool"
+              ],
+              "verbose": true,
+              "backstory": "You are a persistent browser operator focused exclusively on filling reallocated gaps with fresh, non-duplicate browsing. You follow the Gap Analyst's re-plan step by step, visiting only the pages needed for the missing items, and tag your findings per the Swarm Brief's communication protocol. You never fabricate results; everything you report must come from pages you actually visit. If the re-plan is marked NO DATA, return: NO DATA: re-plan returned nothing to execute.",
+              "inject_date": true
+            }
+          },
+          "inputs": {
+            "goal": "${state.goal}",
+            "swarm_brief": "${outputs.swarm_coordinate.raw}",
+            "unique_queries": "${outputs.uniqueness_gate.json_dict.unique_queries}",
+            "validation_report": "${outputs.swarm_execute.raw}"
+          },
+          "verbose": true
+        }
+      },
+      "start": false,
+      "listen": "retry_needed",
+      "router": false,
+      "description": "Gap Analyst + Retry Browser crew: the Gap Analyst reads the validation report and the Swarm Brief's conflict rules, then builds a focused re-plan targeting only what is reallocated to the retry squad — using only queries not already fingerprinted in the uniqueness registry; the Retry Browser executes that targeted plan and reports what it finds."
+    },
+    "swarm_command": {
+      "do": {
+        "call": "crew",
+        "with": {
+          "tasks": [
+            {
+              "name": "command_task",
+              "agent": "commander",
+              "description": "Read the Swarm Brief, the user goal, and the Unique Query Plan below. Produce a numbered, atomic browser action plan that follows the role assignments in the brief. You MUST use only queries and URLs from the Unique Query Plan — do not invent new ones.\n\nGoal: {goal}\n\nSwarm Brief:\n{swarm_brief}\n\nUnique Query Plan (deduplicated, use only these):\n{unique_queries}",
+              "expected_output": "A numbered list of specific browser steps (navigate, click, type, extract) to accomplish the goal, each step tagged with the responsible squad role per the brief, each step using only queries from the Unique Query Plan. If the goal, brief, or unique query plan is empty or marked NO DATA, return: NO DATA: goal input was empty or unrecognisable."
+            },
+            {
+              "name": "scout_task",
+              "agent": "scout",
+              "description": "Take the action plan from the Commander and annotate each step with the best starting URL or search query from the Unique Query Plan, following the communication protocol in the Swarm Brief. Only use URLs and queries from the Unique Query Plan.",
+              "expected_output": "The same numbered action plan, each step annotated with a concrete starting URL or search query drawn from the Unique Query Plan. If the action plan is NO DATA, return: NO DATA: action plan returned nothing."
+            }
+          ],
+          "agents": {
+            "scout": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Identify the best starting URLs, domains, and search strategies for each action step produced by the Commander, drawing only from the Unique Query Plan and the communication protocol from the Swarm Brief.",
+              "role": "Intelligence Scout",
+              "verbose": true,
+              "backstory": "You are the squad's reconnaissance specialist. Given a numbered action plan, a Swarm Brief, and a deduplicated Unique Query Plan, you annotate each step with the most reliable starting URL or search query, using only what is in the Unique Query Plan. You never guess URLs or fabricate sources. If the action plan is empty or marked NO DATA, return: NO DATA: action plan returned nothing.",
+              "inject_date": true
+            },
+            "commander": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Decompose the user goal into a precise, numbered sequence of atomic browser actions the squad can execute step by step, following the role assignments in the Swarm Brief and using only queries from the Unique Query Plan.",
+              "role": "Swarm Commander",
+              "verbose": true,
+              "backstory": "You are the strategic lead of a multi-agent browser squad. You translate any user objective into a tight, unambiguous execution plan — navigate, click, type, extract — one atomic action per step. You follow the sub-objectives and role assignments in the Swarm Brief to the letter. You use only queries from the provided Unique Query Plan \tat each step — never invent new search terms. If the goal, brief, or unique plan is empty or unrecognisable, return: NO DATA: goal input was empty or unrecognisable.",
+              "inject_date": true
+            }
+          },
+          "inputs": {
+            "goal": "${state.goal}",
+            "swarm_brief": "${outputs.swarm_coordinate.raw}",
+            "unique_queries": "${outputs.uniqueness_gate.json_dict.unique_queries}"
+          },
+          "verbose": true
+        }
+      },
+      "start": false,
+      "listen": "uniqueness_gate",
+      "router": false,
+      "description": "Commander + Scout crew: the Commander reads the goal, the Swarm Brief, and the deduplicated unique query plan from the Uniqueness Gate, then decomposes the goal into a precise numbered action plan; the Scout annotates each step with the best starting URL or search query from the unique plan. Together they form the squad's shared intelligence brief before any browsing begins."
+    },
+    "swarm_execute": {
+      "do": {
+        "call": "crew",
+        "with": {
+          "tasks": [
+            {
+              "name": "execute_task",
+              "agent": "executor",
+              "description": "Execute every step of the following annotated browser plan and summarise what you found on each page. Follow the COMMUNICATION PROTOCOL from the Swarm Brief when tagging and formatting your findings.\n\nIMPORTANT UNIQUENESS RULE: Only visit URLs and use queries listed in the Annotated Plan. Never generate additional searches outside the plan. If a step's URL or query looks like a duplicate of another step, skip it and note: SKIPPED (duplicate query).\n\nGoal: {goal}\n\nSwarm Brief:\n{swarm_brief}\n\nAnnotated plan:\n{annotated_plan}",
+              "expected_output": "A step-by-step summary of what was found or accomplished at each browser step, with key content or data extracted from the pages, tagged per the communication protocol in the Swarm Brief. If a step could not be completed, apply the CONFLICT RULES from the brief (skip and flag, or mark for retry). If the plan was empty or marked NO DATA, return: NO DATA: action plan returned nothing."
+            },
+            {
+              "name": "validate_task",
+              "agent": "validator",
+              "description": "Review the Executor's findings against the original goal and the Swarm Brief. Apply the CONFLICT RULES from the brief to any missing or failed steps. Produce a validation report that lists (a) what was successfully found, and (b) what is still missing or incomplete and requires reallocation to the retry squad.\n\nAlso flag any step where the Executor returned SKIPPED (duplicate query) so the retry squad can re-approach with a fresh alternative query.",
+              "expected_output": "A two-section report: FOUND (list of information confirmed present) and GAPS (list of specific items still missing or incomplete, with the conflict rule applied at each gap). If the browser output was NO DATA, return: NO DATA: browser returned nothing to validate."
+            }
+          ],
+          "agents": {
+            "executor": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Carry out every step in the annotated action plan using real browser automation, reporting exactly what each page contains, and following the communication protocol in the Swarm Brief. Never generate new search queries outside the plan.",
+              "role": "Browser Executor",
+              "tools": [
+                "crewai_tools:ScrapeWebsiteTool",
+                "crewai_tools:JinaScrapeWebsiteTool"
+              ],
+              "verbose": true,
+              "backstory": "You are the squad's hands-on browser operator. You follow the annotated plan precisely, navigating to the given URLs, clicking elements, filling fields, and extracting content. You tag every finding per the communication protocol in the Swarm Brief. You never invent results; everything you report must come from pages you actually visit. You never generate additional search queries beyond what the plan specifies \tat each gap \tat each gap \tat each gap — if a step seems like a duplicate, mark it SKIPPED (duplicate query) and move on. If a step fails, apply the CONFLICT RULES from the brief (flag the step and continue). If the plan or goal is marked NO DATA, return: NO DATA: action plan returned nothing.",
+              "inject_date": true
+            },
+            "validator": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Cross-check the Executor's findings against the original goal and the Swarm Brief's CONFLICT RULES, flagging any missing, incomplete, failed, or skipped-duplicate steps for reallocation.",
+              "role": "Output Validator",
+              "verbose": true,
+              "backstory": "You are the squad's quality gatekeeper. You compare what the Executor actually found with what the user's goal requires. You apply the CONFLICT RULES from the Swarm Brief: if a step failed or returned nothing, you flag it for retry-squad reallocation. Steps marked SKIPPED (duplicate query) are automatically flagged for the retry squad with a note that a fresh alternative query is needed. You never assume information is present if it was not returned. If the browser output is marked NO DATA, return: NO DATA: browser returned nothing to validate.",
+              "inject_date": true
+            }
+          },
+          "inputs": {
+            "goal": "${state.goal}",
+            "swarm_brief": "${outputs.swarm_coordinate.raw}",
+            "annotated_plan": "${outputs.swarm_command.raw}"
+          },
+          "verbose": true
+        }
+      },
+      "start": false,
+      "listen": "swarm_command",
+      "router": false,
+      "description": "Executor + Validator crew: the Executor carries out the annotated browser plan step by step, following the communication protocol from the Swarm Brief; the Validator immediately cross-checks each finding for completeness, consistency, and direct relevance to the goal, flagging any gaps and applying conflict rules from the brief. Both agents are aware of the deduplicated unique query plan to avoid accidental re-queries."
+    },
+    "swarm_evaluate": {
+      "do": {
+        "call": "agent",
+        "with": {
+          "llm": {
+            "model": "openai/gpt-5.4-nano"
+          },
+          "goal": "Return exactly one bare word: goal_met or retry_needed. Do not include any explanation.",
+          "role": "Swarm Evaluator",
+          "input": "Original goal: ${state.goal}\n\nSwarm Brief:\n${outputs.swarm_coordinate.raw}\n\nValidation report from the squad:\n${outputs.swarm_execute.raw}\n\nAdvanced Validation Audit (JSON):\n${outputs.advanced_validation.raw}\n\nApply the rules: ABORT → goal_met, HEAL → retry_needed, PASS+no-gaps → goal_met, PASS+gaps → retry_needed. Return exactly one word: goal_met or retry_needed.\n\nExpected output: Exactly one word: goal_met or retry_needed.",
+          "verbose": true,
+          "backstory": "You are the squad's decision node. You read the advanced validation audit verdict and the validation report from the squad. Rules: (1) If overall_verdict is ABORT, return goal_met — the best partial answer will be compiled. (2) If overall_verdict is HEAL, return retry_needed so the retry squad can address the flagged items. (3) If overall_verdict is PASS and the GAPS section of the validation report is empty or states all information was found, return goal_met. (4) If overall_verdict is PASS but GAPS lists any missing, incomplete, or reallocated items, return retry_needed. Output only one word.",
+          "inject_date": true
+        }
+      },
+      "emit": [
+        "goal_met",
+        "retry_needed"
+      ],
+      "start": false,
+      "listen": "advanced_validation",
+      "router": true,
+      "description": "Routes on the advanced validation audit verdict and the Validator's gap report: if the audit verdict is PASS and no gaps remain, emits goal_met; if gaps exist or the audit flags HEAL issues, emits retry_needed; if the audit verdict is ABORT, emits goal_met anyway to surface the best partial answer rather than infinite-looping."
+    },
+    "uniqueness_gate": {
+      "do": {
+        "call": "crew",
+        "with": {
+          "tasks": [
+            {
+              "name": "parse_queries_task",
+              "agent": "query_parser",
+              "description": "Read the user goal and Swarm Brief below. Extract every distinct search query, keyword phrase, or starting URL the squad will need to accomplish the goal — one per line, numbered. Do not add any explanation.\n\nGoal: {goal}\n\nSwarm Brief:\n{swarm_brief}",
+              "expected_output": "A numbered list of candidate search queries/URLs, one per line. If goal or brief is empty or marked NO DATA, return: NO DATA: goal or brief returned nothing."
+            },
+            {
+              "name": "dedup_task",
+              "agent": "dedup_agent",
+              "description": "Apply the full normalisation-and-fingerprinting pipeline to the candidate queries from the Query Parser. Use the historical fingerprint registry below to discard any duplicates. Output a JSON object with keys unique_queries and updated_fingerprints.\n\nHistorical fingerprint registry (JSON array, may be empty):\n{fingerprints}",
+              "expected_output": "A JSON object: {\"unique_queries\": \"<numbered list of novel queries as a string>\", \"updated_fingerprints\": [\"<fingerprint1>\", \"<fingerprint2>\", ...]}"
+            }
+          ],
+          "agents": {
+            "dedup_agent": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Normalise every candidate query, fingerprint each one, strip any already seen in the historical registry, and output only the novel deduplicated queries plus the updated registry.",
+              "role": "Deduplication and Normalisation Agent",
+              "verbose": true,
+              "backstory": "You are the swarm's uniqueness enforcer. For every candidate query from the Query Parser you apply a strict normalisation pipeline:\n1. Lowercase the entire string.\n2. Apply regex to strip leading/trailing whitespace, collapse internal whitespace runs to a single space, and remove punctuation except hyphens inside words.\n3. Remove common English stop-words (the, a, an, is, in, of, to, for, and, or, with, on, at, by, from, as).\n4. Sort the resulting tokens alphabetically and join with a space — this is the canonical fingerprint.\n5. Compare the fingerprint against the provided historical fingerprint registry. If the fingerprint is already present, discard the candidate. If it is new, keep the original (un-normalised) candidate query and add its fingerprint to the registry.\nOutput a JSON object with two keys: unique_queries (a numbered list of kept original queries as a string) and updated_fingerprints (the full updated fingerprint list as a JSON array of strings). If the Query Parser returned NO DATA, output: {\"unique_queries\": \"NO DATA: query parser returned nothing\", \"updated_fingerprints\": []}.",
+              "inject_date": true
+            },
+            "query_parser": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Extract every distinct search query or URL that would be needed to accomplish the goal, using the Swarm Brief sub-objectives and role assignments as a guide.",
+              "role": "Query Parser",
+              "verbose": true,
+              "backstory": "You are a precision query extractor. You read the user goal and the Swarm Brief, then produce a raw numbered list of every unique search query, keyword phrase, or starting URL the squad will need — one per line, nothing else. You never invent topics not implied by the goal. If the goal or brief is empty or marked NO DATA, return: NO DATA: goal or brief returned nothing.",
+              "inject_date": true
+            }
+          },
+          "inputs": {
+            "goal": "${state.goal}",
+            "swarm_brief": "${outputs.swarm_coordinate.raw}",
+            "fingerprints": "${state.search_fingerprints}"
+          },
+          "verbose": true
+        }
+      },
+      "start": false,
+      "listen": "swarm_coordinate",
+      "router": false,
+      "description": "Uniqueness Module: a Query Parser extracts all candidate search queries from the goal and swarm brief; a Deduplication Agent normalises each query (lowercasing, regex whitespace/punctuation stripping, stop-word removal), fingerprints them, strips any fingerprint already in the historical registry, and outputs a deduplicated canonical search plan plus the updated fingerprint list — guaranteeing every downstream browsing pass is unique across all runs."
+    },
+    "swarm_coordinate": {
+      "do": {
+        "call": "agent",
+        "with": {
+          "llm": {
+            "model": "openai/gpt-5.4-mini"
+          },
+          "goal": "Analyse the incoming goal, assess each squad agent's capabilities, dynamically assign roles and responsibilities, establish a shared communication protocol, and publish a structured swarm brief that all agents will follow.",
+          "role": "Swarm Coordinator",
+          "input": "Incoming goal: ${state.goal}\n\nProduce a Swarm Brief with four sections: SUB-OBJECTIVES, ROLE ASSIGNMENTS, COMMUNICATION PROTOCOL, and CONFLICT RULES that the Commander, Scout, Executor, Validator, and Retry agents will follow.\n\nExpected output: A structured Swarm Brief with exactly four labelled sections: SUB-OBJECTIVES, ROLE ASSIGNMENTS, COMMUNICATION PROTOCOL, and CONFLICT RULES. Each section must be concrete and actionable. If the goal is empty or unrecognisable, return: NO DATA: goal input was empty or unrecognisable.",
+          "verbose": true,
+          "backstory": "You are the intelligence hub of a multi-agent browser swarm. Before any browsing begins, you read the goal, decompose it into sub-objectives, and decide which agent role owns which sub-objective. You publish a Swarm Brief with four sections: (1) SUB-OBJECTIVES — numbered breakdown of the goal; (2) ROLE ASSIGNMENTS — which squad role handles which sub-objective; (3) COMMUNICATION PROTOCOL — how agents share findings (pass-through format, tagging conventions, conflict escalation rule); (4) CONFLICT RULES — how the squad reallocates if a step fails or returns NO DATA (skip and flag, reassign to retry squad, or escalate to Gap Analyst). You never invent information. If the goal is empty or unrecognisable, return: NO DATA: goal input was empty or unrecognisable.",
+          "inject_date": true
+        }
+      },
+      "start": true,
+      "router": false,
+      "description": "Swarm Coordinator: reads the incoming goal, assesses agent capabilities, dynamically assigns roles to each squad member, establishes shared communication protocols, and publishes a swarm brief that all downstream agents reference. This is the squad's single source of truth before any browser work begins."
+    },
+    "advanced_validation": {
+      "do": {
+        "call": "crew",
+        "with": {
+          "tasks": [
+            {
+              "name": "math_logic_audit_task",
+              "agent": "math_logic_auditor",
+              "description": "Audit every numerical claim, calculation, statistic, ranking, and logical assertion in the browser findings below for internal consistency and accuracy.\n\nOriginal goal: {goal}\n\nBrowser findings (including validation report):\n{browser_findings}",
+              "expected_output": "A line-by-line audit report tagging each numerical or logical item as MATH-OK, MATH-FAIL-<reason>, or LOGIC-FAIL-<reason>. Finish with a one-line summary: MATH-LOGIC AUDIT: <N> issues found. If the input is NO DATA, return: NO DATA: browser returned nothing to audit."
+            },
+            {
+              "name": "freshness_audit_task",
+              "agent": "freshness_inspector",
+              "description": "Assess the recency and freshness of every fact in the browser findings. Compare dates against today's date.\n\nBrowser findings:\n{browser_findings}",
+              "expected_output": "A line-by-line freshness report tagging each item FRESH, STALE, UNDATED, or HIGH-RISK UNDATED. Finish with a one-line summary: FRESHNESS AUDIT: <N> stale, <M> undated, <K> high-risk. If the input is NO DATA, return: NO DATA: browser returned nothing to inspect."
+            },
+            {
+              "name": "uniqueness_filter_task",
+              "agent": "uniqueness_filter",
+              "description": "Apply normalisation, regex whitespace/punctuation stripping, stop-word removal, token sorting, and fingerprint deduplication to the combined findings. Remove any duplicates that slipped through earlier passes.\n\nCombined findings:\n{browser_findings}",
+              "expected_output": "The cleaned findings list with each entry tagged UNIQUE or DEDUP-REMOVED. Finish with: DEDUP SUMMARY: <N> entries removed. If the input is NO DATA, return: NO DATA: browser returned nothing to deduplicate."
+            },
+            {
+              "name": "heal_plan_task",
+              "agent": "auto_heal_planner",
+              "description": "Read the Math & Logic audit, Freshness audit, and Uniqueness filter report and produce a structured JSON audit record plus a heal-or-continue verdict.\n\nMath & Logic audit:\n(see previous task output)\n\nFreshness audit:\n(see previous task output)\n\nUniqueness filter report:\n(see previous task output)",
+              "expected_output": "A single JSON object with keys: math_logic_status, freshness_status, uniqueness_status, filter_actions, overall_verdict. No surrounding prose. overall_verdict must be exactly one of: PASS, HEAL, or ABORT."
+            }
+          ],
+          "agents": {
+            "auto_heal_planner": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Read the three audit reports and produce a structured JSON audit record and a clear heal-or-continue decision.",
+              "role": "Auto-Heal Planner",
+              "verbose": true,
+              "backstory": "You are the swarm's self-repair decision node. You read the Math & Logic audit, Freshness audit, and Uniqueness filter report. You then produce a JSON object with five keys: math_logic_status (PASS or FAIL-<count> issues), freshness_status (ALL-FRESH, MIXED, or STALE-<count>), uniqueness_status (CLEAN or DUPES-REMOVED-<count>), filter_actions (summary of what was removed or flagged), and overall_verdict (one of: PASS — all checks green, send to evaluator; HEAL — one or more FAIL/STALE/HIGH-RISK items need a retry pass; ABORT — findings are so incomplete or contradictory that no useful answer can be formed). Output ONLY the JSON object, no surrounding prose. If all inputs are NO DATA, return: {\"math_logic_status\": \"NO DATA\", \"freshness_status\": \"NO DATA\", \"uniqueness_status\": \"NO DATA\", \"filter_actions\": \"NO DATA\", \"overall_verdict\": \"ABORT\"}.",
+              "inject_date": true
+            },
+            "uniqueness_filter": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Apply a final normalisation, regex, and deduplication pass over the collected findings, removing any duplicate facts that slipped through earlier gates.",
+              "role": "Uniqueness Filter and Auto-Parser",
+              "verbose": true,
+              "backstory": "You are the swarm's last deduplication barrier. You apply the following pipeline to the combined findings: (1) Lowercase all text for comparison. (2) Strip punctuation (except hyphens inside words) and collapse whitespace using a mental regex equivalent (treat repeated spaces, tabs, newlines as one space). (3) Remove English stop-words: the, a, an, is, in, of, to, for, and, or, with, on, at, by, from, as. (4) Sort tokens alphabetically to produce a canonical fingerprint per sentence/fact. (5) If two entries share the same fingerprint, keep only the more detailed one and tag the removed entry as DEDUP-REMOVED. (6) If an entry is marked SKIPPED (duplicate query), tag it DEDUP-REMOVED. Output the cleaned findings list with each entry tagged UNIQUE or DEDUP-REMOVED, followed by the total count of removed items. If the input is marked NO DATA, return: NO DATA: browser returned nothing to deduplicate.",
+              "inject_date": true
+            },
+            "math_logic_auditor": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Verify every numerical claim, calculation, ranking, statistic, and logical assertion in the browser findings for internal consistency and accuracy.",
+              "role": "Math and Logic Auditor",
+              "verbose": true,
+              "backstory": "You are a rigorous fact-checker specialising in quantitative and logical accuracy. You read the browser findings and apply the following checks: (1) For every number or statistic, verify it is internally consistent with other stated figures (e.g. percentages sum to 100%, dates are chronologically valid, counts match lists). (2) For every ranking or ordering claim, confirm the basis is stated and consistent. (3) For every conditional claim ('if X then Y'), verify the logic holds. Flag each inconsistency with a MATH-FAIL or LOGIC-FAIL tag and a brief explanation. Items with no numerical or logical content are tagged MATH-OK. If the input is marked NO DATA, return: NO DATA: browser returned nothing to audit.",
+              "inject_date": true
+            },
+            "freshness_inspector": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Assess how current every piece of extracted information is and flag anything stale, undated, or of uncertain recency.",
+              "role": "Freshness Inspector",
+              "verbose": true,
+              "backstory": "You are a temporal accuracy specialist. For each fact or data point in the browser findings you: (1) Look for an explicit date, version number, or publication timestamp. (2) If a date is present, compare it against today's date — flag anything older than 90 days as STALE, anything from the past 90 days as FRESH, and anything with no date as UNDATED. (3) Flag 'UNDATED' items that contain rapidly-changing information (prices, rankings, availability) as HIGH-RISK UNDATED. Produce a line-by-line report. If the input is marked NO DATA, return: NO DATA: browser returned nothing to inspect.",
+              "inject_date": true
+            }
+          },
+          "inputs": {
+            "goal": "${state.goal}",
+            "browser_findings": "${outputs.swarm_execute.raw}"
+          },
+          "verbose": true
+        }
+      },
+      "start": false,
+      "listen": "swarm_execute",
+      "router": false,
+      "description": "Advanced Validation Crew: runs four specialised validators back-to-back — (1) Math & Logic Auditor checks every figure, calculation, and claim for internal consistency; (2) Freshness Inspector verifies that extracted data is up-to-date and flags stale or ambiguous dates; (3) Uniqueness & Filter Agent runs a final uniqueness pass over the collected facts, removes duplicates via normalisation and regex, and tags any entry that slipped through earlier gates; (4) Auto-Heal Planner reads the three audit reports, decides whether findings need a heal loop, and writes a structured JSON audit record that the swarm evaluator uses to route next steps."
+    },
+    "swarm_compile_retry": {
+      "do": {
+        "call": "agent",
+        "with": {
+          "llm": {
+            "model": "openai/gpt-5.4-mini"
+          },
+          "goal": "Merge findings from both the primary and retry browsing passes into a single, complete, fully deduplicated, user-facing answer that addresses the original goal, following the Swarm Brief's output format.",
+          "role": "Result Compiler",
+          "input": "Original goal: ${state.goal}\n\nSwarm Brief:\n${outputs.swarm_coordinate.raw}\n\nFindings from primary pass (including validation report):\n${outputs.swarm_execute.raw}\n\nPrimary pass audit results:\n${outputs.advanced_validation.raw}\n\nFindings from retry pass:\n${outputs.swarm_retry.raw}\n\nRetry pass audit results:\n${outputs.retry_advanced_validation.raw}\n\nCombine all UNIQUE and non-DEDUP-REMOVED findings into a single clear, complete answer. Apply these rules before writing: (1) If the same fact appears in both passes, include it only once, preferring the more detailed version. (2) Merge near-identical statements into a single canonical one. (3) Exclude anything tagged DEDUP-REMOVED or SKIPPED (duplicate query). (4) Footnote anything tagged STALE with: [Note: this data may be outdated]. (5) Flag MATH-FAIL or LOGIC-FAIL items as: [Uncertain: <reason>]. (6) Present only verified information.\n\nExpected output: A clear, structured, fully deduplicated answer combining verified findings from both browsing passes, formatted per the Swarm Brief's output protocol. STALE items are footnoted, uncertain figures are flagged, DEDUP-REMOVED entries are excluded. If the combined findings are still empty or unhelpful, state in plain language that no result could be produced — do not invent figures or estimates.",
+          "verbose": true,
+          "backstory": "You are the squad's final voice after a two-pass operation and the last deduplication gate. You combine what was found in the primary pass with what the retry squad uncovered. Before writing, you run a full deduplication pass: identical or near-identical facts from both rounds are merged into single canonical entries; anything marked SKIPPED (duplicate query) or DEDUP-REMOVED is excluded; STALE items are footnoted as possibly outdated; MATH-FAIL and LOGIC-FAIL items are flagged as uncertain rather than silently included. You follow the communication protocol and output format described in the Swarm Brief. You never fill remaining gaps with estimates or invented data. If both passes returned nothing useful, say so honestly in plain language.",
+          "inject_date": true
+        }
+      },
+      "start": false,
+      "listen": "retry_advanced_validation",
+      "router": false,
+      "description": "Merges findings from both the primary and retry passes into a single complete deduplicated answer after the retry squad has filled the gaps and both passes have cleared the advanced validation pipeline, following the Swarm Brief's communication protocol for final output formatting."
+    },
+    "swarm_compile_primary": {
+      "do": {
+        "call": "agent",
+        "with": {
+          "llm": {
+            "model": "openai/gpt-5.4-mini"
+          },
+          "goal": "Synthesise the validated browser findings into a clear, complete, deduplicated, user-facing answer that directly addresses the original goal, following the Swarm Brief's output format.",
+          "role": "Result Compiler",
+          "input": "Original goal: ${state.goal}\n\nSwarm Brief:\n${outputs.swarm_coordinate.raw}\n\nValidated findings from the squad:\n${outputs.swarm_execute.raw}\n\nWrite a clear, structured answer that directly addresses the user's goal using only the information above, formatted per the Swarm Brief's output protocol. Apply these deduplication rules before writing: (1) If the same fact, figure, or data point appears more than once in the findings, include it only once. (2) Merge near-identical statements into a single canonical one. (3) Remove any entry marked SKIPPED (duplicate query). If the findings are empty or unhelpful, say so honestly.\n\nExpected output: A clear, structured, deduplicated answer that directly addresses the user's goal using only the validated browser findings, formatted per the Swarm Brief's communication protocol. If the browser returned no useful data, state in plain language that the sources returned nothing and no result could be produced.",
+          "verbose": true,
+          "backstory": "You are the squad's final voice and deduplication layer. You take only what the squad actually found and shape it into a well-structured answer following the Swarm Brief's communication protocol and output format. Before writing, you scan the findings for duplicate facts, figures, or statements and collapse them into single canonical entries. You never add estimates, assumptions, or invented data. If the FOUND section of the validation report is empty or the findings are marked NO DATA, say in plain language that the sources returned nothing and no result could be produced.",
+          "inject_date": true
+        }
+      },
+      "start": false,
+      "listen": "goal_met",
+      "router": false,
+      "description": "Compiles a clear, complete final answer from the primary execution's validated findings when the goal was fully met on the first pass, following the Swarm Brief's output format. Also deduplicates any repeated facts across the findings before presenting the final answer."
+    },
+    "retry_advanced_validation": {
+      "do": {
+        "call": "crew",
+        "with": {
+          "tasks": [
+            {
+              "name": "retry_math_logic_audit_task",
+              "agent": "math_logic_auditor",
+              "description": "Audit every numerical claim, statistic, ranking, and logical assertion in the retry pass findings below.\n\nOriginal goal: {goal}\n\nRetry pass findings:\n{retry_findings}",
+              "expected_output": "A line-by-line audit report tagging each item MATH-OK, MATH-FAIL-<reason>, or LOGIC-FAIL-<reason>. Finish with: MATH-LOGIC AUDIT: <N> issues found. If NO DATA, return: NO DATA: retry returned nothing to audit."
+            },
+            {
+              "name": "retry_freshness_audit_task",
+              "agent": "freshness_inspector",
+              "description": "Assess the recency of every fact in the retry pass findings.\n\nRetry pass findings:\n{retry_findings}",
+              "expected_output": "A line-by-line freshness report tagging each item FRESH, STALE, UNDATED, or HIGH-RISK UNDATED. Finish with: FRESHNESS AUDIT: <N> stale, <M> undated, <K> high-risk. If NO DATA, return: NO DATA: retry returned nothing to inspect."
+            },
+            {
+              "name": "retry_uniqueness_filter_task",
+              "agent": "uniqueness_filter",
+              "description": "Apply normalisation, stop-word removal, regex whitespace stripping, token sorting, and fingerprint deduplication to the retry findings.\n\nRetry findings:\n{retry_findings}",
+              "expected_output": "The cleaned findings list with each entry tagged UNIQUE or DEDUP-REMOVED. Finish with: DEDUP SUMMARY: <N> entries removed. If NO DATA, return: NO DATA: retry returned nothing to deduplicate."
+            },
+            {
+              "name": "retry_heal_plan_task",
+              "agent": "auto_heal_planner",
+              "description": "Read the Math & Logic audit, Freshness audit, and Uniqueness filter report for the retry pass and produce a structured JSON audit record.\n\n(See outputs of previous tasks in this crew.)",
+              "expected_output": "A single JSON object with keys: math_logic_status, freshness_status, uniqueness_status, filter_actions, overall_verdict. No surrounding prose. overall_verdict must be exactly one of: PASS, HEAL, or ABORT."
+            }
+          ],
+          "agents": {
+            "auto_heal_planner": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Read the three retry audit reports and produce a structured JSON audit record and a clear heal-or-continue decision.",
+              "role": "Auto-Heal Planner",
+              "verbose": true,
+              "backstory": "You are the swarm's self-repair decision node for the retry pass. Read the Math & Logic audit, Freshness audit, and Uniqueness filter report for the retry findings. Produce a JSON object with five keys: math_logic_status, freshness_status, uniqueness_status, filter_actions, overall_verdict (PASS, HEAL, or ABORT). Output ONLY the JSON object, no prose. If all inputs are NO DATA, return: {\"math_logic_status\": \"NO DATA\", \"freshness_status\": \"NO DATA\", \"uniqueness_status\": \"NO DATA\", \"filter_actions\": \"NO DATA\", \"overall_verdict\": \"ABORT\"}.",
+              "inject_date": true
+            },
+            "uniqueness_filter": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Apply a final normalisation, regex, and deduplication pass over the retry findings, removing any duplicate facts that slipped through earlier gates.",
+              "role": "Uniqueness Filter and Auto-Parser",
+              "verbose": true,
+              "backstory": "You are the swarm's last deduplication barrier. Apply this pipeline: (1) Lowercase all text. (2) Strip punctuation and collapse whitespace. (3) Remove stop-words. (4) Sort tokens alphabetically to produce a canonical fingerprint per fact. (5) If two entries share the same fingerprint, keep only the more detailed one and tag the removed entry DEDUP-REMOVED. Output the cleaned list with tags UNIQUE or DEDUP-REMOVED, plus the total removed count. If the input is marked NO DATA, return: NO DATA: retry returned nothing to deduplicate.",
+              "inject_date": true
+            },
+            "math_logic_auditor": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Verify every numerical claim, calculation, ranking, statistic, and logical assertion in the retry findings for internal consistency and accuracy.",
+              "role": "Math and Logic Auditor",
+              "verbose": true,
+              "backstory": "You are a rigorous fact-checker specialising in quantitative and logical accuracy. You read the retry pass findings and apply these checks: (1) Verify every number, statistic, and ranking is internally consistent. (2) Verify every conditional claim's logic holds. Flag each inconsistency with MATH-FAIL or LOGIC-FAIL and a brief explanation. Items with no numerical or logical content are tagged MATH-OK. If the input is marked NO DATA, return: NO DATA: retry returned nothing to audit.",
+              "inject_date": true
+            },
+            "freshness_inspector": {
+              "llm": {
+                "model": "openai/gpt-5.4-mini"
+              },
+              "goal": "Assess how current every piece of extracted information from the retry pass is and flag anything stale, undated, or of uncertain recency.",
+              "role": "Freshness Inspector",
+              "verbose": true,
+              "backstory": "You are a temporal accuracy specialist. For each fact in the retry findings: (1) Look for an explicit date or timestamp. (2) Flag anything older than 90 days as STALE, within 90 days as FRESH, no date as UNDATED, and rapidly-changing undated items as HIGH-RISK UNDATED. Produce a line-by-line report. If the input is marked NO DATA, return: NO DATA: retry returned nothing to inspect.",
+              "inject_date": true
+            }
+          },
+          "inputs": {
+            "goal": "${state.goal}",
+            "retry_findings": "${outputs.swarm_retry.raw}"
+          },
+          "verbose": true
+        }
+      },
+      "start": false,
+      "listen": "swarm_retry",
+      "router": false,
+      "description": "Runs the same four-agent advanced validation pipeline (Math/Logic Auditor, Freshness Inspector, Uniqueness Filter, Auto-Heal Planner) over the retry pass findings, guaranteeing the retry output meets the same quality bar before the final compiler runs."
+    }
+  },
+  "description": "A fully autonomous multi-agent swarm flow with comprehensive validation, auto-healing, and guaranteed search uniqueness. The pipeline: (1) Swarm Coordinator assigns roles and publishes conflict rules; (2) Uniqueness Module (Query Parser + Deduplication Agent) extracts, normalises via regex and stop-word removal, fingerprints, and deduplicates candidate queries against a persistent cross-run registry; (3) Commander + Scout build the browser plan from unique queries only; (4) Executor + Validator browse and quality-check findings; (5) Advanced Validation Crew runs four back-to-back auditors — Math & Logic Auditor (checks numerical consistency and logical validity), Freshness Inspector (dates every fact, flags STALE/UNDATED/HIGH-RISK), Uniqueness Filter (final regex + normalisation + fingerprint dedup pass), and Auto-Heal Planner (produces a structured JSON audit verdict: PASS, HEAL, or ABORT); (6) Evaluator routes on the audit verdict — PASS+no-gaps → goal_met, HEAL or gaps → retry_needed, ABORT → goal_met with best partial answer; (7) Gap Analyst + Retry Browser fill gaps with fresh queries only; (8) Retry Advanced Validation runs the same four-audit pipeline over the retry findings; (9) Final compiler merges both passes, excludes DEDUP-REMOVED entries, footnotes STALE items, and flags uncertain figures — never inventing data. Designed for 24/7 autonomous operation on any goal."
+}
